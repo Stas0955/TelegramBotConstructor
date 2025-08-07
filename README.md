@@ -12,7 +12,7 @@
 
 ## Пример команды бота config.yml
 
-```
+```yml
 commands:
  /start:
     text: |
@@ -33,7 +33,7 @@ commands:
 ```
 ## Пример кнопки бота config.yml
 
-```
+```yml
 buttons:
   "Основное меню":
     text: "Вы вернулись в главное меню"
@@ -44,14 +44,14 @@ buttons:
 ```
 ## Пример неизвестной команды - ответ от бота config.yml
 
-```
+```yml
 unknown_message:
   text: "Извините, я не понимаю эту команду. Напишите /help для справки."
   backup_print: 1  # Задержка перед отправкой (имитация печати)
 ```
 ## Пример автоматичекий рассылки (переодичной) auto_message.yml
 
-```
+```yml
 tech_notification:
   interval: 1800  # Каждые 30 минут
   message:
@@ -64,7 +64,7 @@ tech_notification:
 ```
 ## Пример автоматичекий рассылки (точной по времени) auto_message.yml
 
-```
+```yml
 evening_reminder:
   time: "20:00"  # Каждый день в 20:00
   message:
