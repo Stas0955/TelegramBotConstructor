@@ -68,23 +68,51 @@ def init_db():
             )
         """)
 
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  
+
 init_db()
 
 def save_user(chat_id: int, username: str = None, first_name: str = None, last_name: str = None):
     with sqlite3.connect("users.db") as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO users 
-            (chat_id, username, first_name, last_name, date_added)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO users 
+            (chat_id, username, first_name, last_name, date_added, is_blocked)
+            VALUES (?, ?, ?, ?, ?, 0)
             """,
             (chat_id, username, first_name, last_name, datetime.now().isoformat())
         )
 
 def get_all_users() -> list[int]:
     with sqlite3.connect("users.db") as conn:
-        cursor = conn.execute("SELECT chat_id FROM users")
+        cursor = conn.execute("SELECT chat_id FROM users WHERE is_blocked = 0")
         return [row[0] for row in cursor.fetchall()]
+
+def get_active_users_count() -> int:
+    with sqlite3.connect("users.db") as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 0")
+        return cursor.fetchone()[0]
+
+def get_total_users_count() -> int:
+    with sqlite3.connect("users.db") as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM users")
+        return cursor.fetchone()[0]
+
+def get_blocked_users_count() -> int:
+    with sqlite3.connect("users.db") as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 1")
+        return cursor.fetchone()[0]
+
+def block_user(chat_id: int):
+    with sqlite3.connect("users.db") as conn:
+        conn.execute("UPDATE users SET is_blocked = 1 WHERE chat_id = ?", (chat_id,))
+
+def unblock_user(chat_id: int):
+    with sqlite3.connect("users.db") as conn:
+        conn.execute("UPDATE users SET is_blocked = 0 WHERE chat_id = ?", (chat_id,))
 
 def get_reply_keyboard(buttons):
     if not buttons:
@@ -94,13 +122,7 @@ def get_reply_keyboard(buttons):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-for cmd in config["commands"]:
-    if cmd.startswith('/'):
-        cmd_name = cmd[1:]  
 
-        @dp.message(Command(cmd_name))
-        async def handle_command(message: types.Message, cmd=cmd):
-            await process_command(message.chat.id, config["commands"][cmd])
 def get_inline_keyboard(buttons):
     if not buttons:
         return None
@@ -287,6 +309,7 @@ async def cmd_template_message(message: types.Message):
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
+
 @dp.callback_query(F.data.startswith("broadcast_confirm:"))
 async def confirm_broadcast(callback: types.CallbackQuery):
     template_name = callback.data.split(":")[1]
@@ -329,10 +352,12 @@ async def confirm_broadcast(callback: types.CallbackQuery):
         f"• Не удалось: {failed}\n"
         f"• Всего: {total_users}"
     )
+
 @dp.callback_query(F.data == "broadcast_cancel")
 async def cancel_broadcast(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ Рассылка отменена")
     await callback.answer()
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     save_user(
@@ -344,6 +369,23 @@ async def cmd_start(message: types.Message):
 
     if "/start" in config["commands"]:
         await process_command(message.chat.id, config["commands"]["/start"])
+def register_commands():
+    for cmd in config["commands"]:
+        if cmd.startswith('/'):
+            cmd_name = cmd[1:]  
+
+            async def command_handler(message: types.Message, cmd=cmd):
+                save_user(
+                    message.chat.id,
+                    message.from_user.username,
+                    message.from_user.first_name,
+                    message.from_user.last_name
+                )
+                await process_command(message.chat.id, config["commands"][cmd])
+
+            dp.message.register(command_handler, Command(cmd_name))
+
+register_commands()
 
 @dp.message(Command("msg"))
 async def cmd_msg(message: types.Message, state: FSMContext):
@@ -402,36 +444,52 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
         f"• Всего: {total_users}"
     )
     await state.clear()
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
-        users_count = len(get_all_users())
-        await message.answer(f"📊 Статистика бота:\n"
-                           f"• Всего пользователей: {users_count}")
+        active_users = get_active_users_count()
+        total_users = get_total_users_count()
+        blocked_users = get_blocked_users_count()
 
-@dp.message(Command("broadcast"))
-async def cmd_broadcast(message: types.Message):
-    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
-        if len(message.text.split()) > 1:
-            text = ' '.join(message.text.split()[1:])
-            users = get_all_users()
-            await message.answer(f"Начинаю рассылку сообщения для {len(users)} пользователей...")
+        await message.answer(
+            f"📊 Статистика бота:\n"
+            f"• Активных пользователей: {active_users}\n"
+            f"• Заблокированных: {blocked_users}\n"
+            f"• Всего пользователей: {total_users}"
+        )
+    else:
+        await message.answer("⛔ У вас нет прав для этой команды")
 
-            success = 0
-            failed = 0
+@dp.message(Command("block"))
+async def cmd_block_user(message: types.Message):
+    if not (config.get("admin_ids") and message.from_user.id in config["admin_ids"]):
+        await message.answer("⛔ У вас нет прав для этой команды")
+        return
 
-            for chat_id in users:
-                try:
-                    await bot.send_message(chat_id, text)
-                    success += 1
-                    await asyncio.sleep(0.1)
-                except Exception as e:
-                    failed += 1
-                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+    try:
+        chat_id = int(message.text.split()[1])
+        block_user(chat_id)
+        await message.answer(f"✅ Пользователь {chat_id} заблокирован")
+    except (IndexError, ValueError):
+        await message.answer("Используйте: /block <user_id>")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
 
-            await message.answer(f"Рассылка завершена:\n"
-                               f"• Успешно: {success}\n"
-                               f"• Не удалось: {failed}")
+@dp.message(Command("unblock"))
+async def cmd_unblock_user(message: types.Message):
+    if not (config.get("admin_ids") and message.from_user.id in config["admin_ids"]):
+        await message.answer("⛔ У вас нет прав для этой команды")
+        return
+
+    try:
+        chat_id = int(message.text.split()[1])
+        unblock_user(chat_id)
+        await message.answer(f"✅ Пользователь {chat_id} разблокирован")
+    except (IndexError, ValueError):
+        await message.answer("Используйте: /unblock <user_id>")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {str(e)}")
 
 @dp.message(F.text.in_(config.get("buttons", {}).keys()))
 async def handle_reply_buttons(message: types.Message):
@@ -500,14 +558,7 @@ async def handle_unknown(message: types.Message):
             message.chat.id,
             config.get("unknown_message", {"text": "Пожалуйста, используйте команды из меню"})
         )
-async def register_commands_handlers():
-    for cmd, cmd_data in config["commands"].items():
-        if cmd.startswith('/'):
-            command = cmd[1:]  
 
-            @dp.message(Command(command))
-            async def command_handler(message: types.Message, cmd=cmd):
-                await process_command(message.chat.id, config["commands"][cmd])
 async def on_startup():
     logger.info("Бот запущен!")
     await setup_broadcasts()
