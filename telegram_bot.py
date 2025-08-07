@@ -32,11 +32,12 @@ logger = logging.getLogger(__name__)
 
 bot_running = True
 bot_task = None
-dp = Dispatcher()  
+dp = Dispatcher()  #
 
 
 with open("config.yml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
+
 
 try:
     with open("auto_message.yml", "r", encoding="utf-8") as f:
@@ -45,10 +46,12 @@ except FileNotFoundError:
     logger.warning("Файл auto_message.yml не найден, рассылка отключена")
     auto_messages = {}
 
+
 bot = Bot(
     token=config["bot"]["token"],
     default=DefaultBotProperties(parse_mode="HTML")
 )
+
 
 def init_db():
     with sqlite3.connect("users.db") as conn:
@@ -235,6 +238,7 @@ async def setup_broadcasts():
         except Exception as e:
             logger.error(f"Ошибка настройки рассылки '{message_name}': {str(e)}")
 
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     save_user(
@@ -279,6 +283,69 @@ async def cmd_broadcast(message: types.Message):
                                f"• Не удалось: {failed}")
 
 
+broadcast_states = {}
+
+
+@dp.message(Command("msg"))
+async def cmd_msg(message: types.Message):
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        broadcast_states[message.from_user.id] = True
+        await message.answer(
+            "✉️ Введите сообщение для рассылки (поддерживаются фото с подписями и HTML-форматирование текста):\n"
+            "Отправьте /cancel чтобы отменить рассылку."
+        )
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message):
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        if message.from_user.id in broadcast_states:
+            del broadcast_states[message.from_user.id]
+            await message.answer("❌ Рассылка отменена")
+
+
+@dp.message(F.content_type.in_({'text', 'photo'}))
+async def handle_broadcast_message(message: types.Message):
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        if message.from_user.id in broadcast_states:
+   
+            del broadcast_states[message.from_user.id]
+            
+            users = get_all_users()
+            await message.answer(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
+            
+            success = 0
+            failed = 0
+            
+            for chat_id in users:
+                try:
+                    if message.content_type == 'photo':
+                   
+                        await bot.send_photo(
+                            chat_id=chat_id,
+                            photo=message.photo[-1].file_id,
+                            caption=message.caption if message.caption else None,
+                            parse_mode="HTML"
+                        )
+                    else:
+                      
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=message.text,
+                            parse_mode="HTML"
+                        )
+                    success += 1
+                    await asyncio.sleep(0.1)  
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+            
+            await message.answer(
+                f"✅ Рассылка завершена:\n"
+                f"• Успешно отправлено: {success}\n"
+                f"• Не удалось отправить: {failed}"
+            )
+            
 @dp.message(F.text.in_(config.get("buttons", {}).keys()))
 async def handle_reply_buttons(message: types.Message):
     save_user(
@@ -291,6 +358,7 @@ async def handle_reply_buttons(message: types.Message):
 
 @dp.callback_query(F.data.in_(config.get("buttons", {}).keys()))
 async def handle_inline_buttons(callback: types.CallbackQuery):
+
     await callback.answer()
     
     save_user(
@@ -301,11 +369,13 @@ async def handle_inline_buttons(callback: types.CallbackQuery):
     )
     
     button_data = config["buttons"][callback.data]
+
     if not (isinstance(button_data, dict) and "url" in button_data):
         await process_command(callback.message.chat.id, button_data)
 
 @dp.callback_query()
 async def handle_all_inline_buttons(callback: types.CallbackQuery):
+ 
     await callback.answer()
     
     save_user(
@@ -317,10 +387,13 @@ async def handle_all_inline_buttons(callback: types.CallbackQuery):
     
     if callback.data in config.get("buttons", {}):
         button_data = config["buttons"][callback.data]
+
         if not (isinstance(button_data, dict) and "url" in button_data):
             await process_command(callback.message.chat.id, button_data)
     else:
+
         await callback.message.answer("Кнопка не настроена")
+
 @dp.message()
 async def handle_unknown(message: types.Message):
     save_user(
@@ -343,8 +416,9 @@ async def handle_unknown(message: types.Message):
 async def register_commands_handlers():
     for cmd, cmd_data in config["commands"].items():
         if cmd.startswith('/'):
-            command = cmd[1:]  
+            command = cmd[1:] 
             
+
             @dp.message(Command(command))
             async def command_handler(message: types.Message, cmd=cmd):
                 await process_command(message.chat.id, config["commands"][cmd])
@@ -357,7 +431,7 @@ async def set_bot_commands():
     commands = []
     for cmd, data in config["commands"].items():
         if cmd.startswith('/') and "description" in data:
-            command = cmd.lstrip('/')  # Убираем слеш для API
+            command = cmd.lstrip('/') 
             description = data["description"]
             commands.append(types.BotCommand(command=command, description=description))
     
@@ -372,7 +446,6 @@ def create_gui():
             root.destroy()
             if 'loop' in globals():
                 loop.call_soon_threadsafe(loop.stop)
-
             os.kill(os.getpid(), signal.SIGTERM)
     
     root = tk.Tk()
@@ -422,5 +495,7 @@ if __name__ == "__main__":
     except SystemExit:
         os._exit(0)
     
+
     logger.info("Бот остановлен")
     os._exit(0)
+
