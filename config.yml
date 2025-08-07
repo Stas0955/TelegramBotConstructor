@@ -2,8 +2,6 @@ bot:
   token: "YOUR_TOKEN"
   parse_mode: "HTML"
   
-# Настройки проверки подписки
-
 
 commands:
   /start:
@@ -158,3 +156,4 @@ buttons:
 unknown_message:
    text: "Такой команды я не знаю. Введи /start"
    inline_buttons: ["Главное меню"]
+
