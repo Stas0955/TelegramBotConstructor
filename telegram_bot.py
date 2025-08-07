@@ -19,8 +19,11 @@ from aiogram.types import (
 )
 from aiogram.enums import ChatAction
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime, time
 import logging
+
 
 
 logging.basicConfig(
@@ -32,8 +35,10 @@ logger = logging.getLogger(__name__)
 
 bot_running = True
 bot_task = None
-dp = Dispatcher()  #
+dp = Dispatcher() 
 
+class BroadcastStates(StatesGroup):
+    waiting_for_message = State()
 
 with open("config.yml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -238,7 +243,6 @@ async def setup_broadcasts():
         except Exception as e:
             logger.error(f"Ошибка настройки рассылки '{message_name}': {str(e)}")
 
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     save_user(
@@ -251,6 +255,66 @@ async def cmd_start(message: types.Message):
     if "/start" in config["commands"]:
         await process_command(message.chat.id, config["commands"]["/start"])
 
+@dp.message(Command("msg"))
+async def cmd_msg(message: types.Message, state: FSMContext):
+
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        await message.answer(
+            "📢 Введите сообщение для рассылки:\n"
+            "• Можно отправить текст с форматированием\n"
+            "• Или фото с подписью\n"
+            "❌ Для отмены отправьте /cancel"
+        )
+     
+        await state.set_state(BroadcastStates.waiting_for_message)
+    else:
+        await message.answer("⛔ У вас нет прав для этой команды")
+
+
+@dp.message(Command("cancel"), BroadcastStates.waiting_for_message)
+async def cancel_broadcast(message: types.Message, state: FSMContext):
+    await message.answer("❌ Рассылка отменена")
+    await state.clear()
+
+@dp.message(BroadcastStates.waiting_for_message)
+async def process_broadcast_message(message: types.Message, state: FSMContext):
+    users = get_all_users()
+    total_users = len(users)
+    processing_msg = await message.answer(f"⏳ Начинаю рассылку для {total_users} пользователей...")
+    
+    success = 0
+    failed = 0
+    
+  
+    for chat_id in users:
+        try:
+            if message.photo:
+              
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=message.photo[-1].file_id,
+                    caption=message.caption if message.caption else ""
+                )
+            elif message.text:
+            
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=message.text
+                )
+            success += 1
+            await asyncio.sleep(0.1) 
+        except Exception as e:
+            failed += 1
+            logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+    
+
+    await processing_msg.edit_text(
+        f"✅ Рассылка завершена:\n"
+        f"• Успешно: {success}\n"
+        f"• Не удалось: {failed}\n"
+        f"• Всего: {total_users}"
+    )
+    await state.clear()
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
@@ -283,69 +347,6 @@ async def cmd_broadcast(message: types.Message):
                                f"• Не удалось: {failed}")
 
 
-broadcast_states = {}
-
-
-@dp.message(Command("msg"))
-async def cmd_msg(message: types.Message):
-    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
-        broadcast_states[message.from_user.id] = True
-        await message.answer(
-            "✉️ Введите сообщение для рассылки (поддерживаются фото с подписями и HTML-форматирование текста):\n"
-            "Отправьте /cancel чтобы отменить рассылку."
-        )
-
-
-@dp.message(Command("cancel"))
-async def cmd_cancel(message: types.Message):
-    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
-        if message.from_user.id in broadcast_states:
-            del broadcast_states[message.from_user.id]
-            await message.answer("❌ Рассылка отменена")
-
-
-@dp.message(F.content_type.in_({'text', 'photo'}))
-async def handle_broadcast_message(message: types.Message):
-    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
-        if message.from_user.id in broadcast_states:
-   
-            del broadcast_states[message.from_user.id]
-            
-            users = get_all_users()
-            await message.answer(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
-            
-            success = 0
-            failed = 0
-            
-            for chat_id in users:
-                try:
-                    if message.content_type == 'photo':
-                   
-                        await bot.send_photo(
-                            chat_id=chat_id,
-                            photo=message.photo[-1].file_id,
-                            caption=message.caption if message.caption else None,
-                            parse_mode="HTML"
-                        )
-                    else:
-                      
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=message.text,
-                            parse_mode="HTML"
-                        )
-                    success += 1
-                    await asyncio.sleep(0.1)  
-                except Exception as e:
-                    failed += 1
-                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
-            
-            await message.answer(
-                f"✅ Рассылка завершена:\n"
-                f"• Успешно отправлено: {success}\n"
-                f"• Не удалось отправить: {failed}"
-            )
-            
 @dp.message(F.text.in_(config.get("buttons", {}).keys()))
 async def handle_reply_buttons(message: types.Message):
     save_user(
@@ -369,13 +370,13 @@ async def handle_inline_buttons(callback: types.CallbackQuery):
     )
     
     button_data = config["buttons"][callback.data]
-
+    
     if not (isinstance(button_data, dict) and "url" in button_data):
         await process_command(callback.message.chat.id, button_data)
 
 @dp.callback_query()
 async def handle_all_inline_buttons(callback: types.CallbackQuery):
- 
+
     await callback.answer()
     
     save_user(
@@ -387,11 +388,11 @@ async def handle_all_inline_buttons(callback: types.CallbackQuery):
     
     if callback.data in config.get("buttons", {}):
         button_data = config["buttons"][callback.data]
-
+       
         if not (isinstance(button_data, dict) and "url" in button_data):
             await process_command(callback.message.chat.id, button_data)
     else:
-
+        
         await callback.message.answer("Кнопка не настроена")
 
 @dp.message()
@@ -416,9 +417,9 @@ async def handle_unknown(message: types.Message):
 async def register_commands_handlers():
     for cmd, cmd_data in config["commands"].items():
         if cmd.startswith('/'):
-            command = cmd[1:] 
+            command = cmd[1:]  
             
-
+          
             @dp.message(Command(command))
             async def command_handler(message: types.Message, cmd=cmd):
                 await process_command(message.chat.id, config["commands"][cmd])
@@ -428,6 +429,7 @@ async def on_startup():
     await set_bot_commands()
 
 async def set_bot_commands():
+
     commands = []
     for cmd, data in config["commands"].items():
         if cmd.startswith('/') and "description" in data:
@@ -438,14 +440,18 @@ async def set_bot_commands():
     if commands:
         await bot.set_my_commands(commands)
         logger.info("Команды бота обновлены")
+
 def create_gui():
     def stop_bot():
         global bot_running
         if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите остановить бота?"):
             bot_running = False
+         
             root.destroy()
+    
             if 'loop' in globals():
                 loop.call_soon_threadsafe(loop.stop)
+
             os.kill(os.getpid(), signal.SIGTERM)
     
     root = tk.Tk()
@@ -487,9 +493,11 @@ def start_bot():
         sys.exit(0)
 
 if __name__ == "__main__":
+
     gui_thread = threading.Thread(target=create_gui, daemon=True)
     gui_thread.start()
     
+
     try:
         start_bot()
     except SystemExit:
