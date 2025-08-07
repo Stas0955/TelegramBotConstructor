@@ -1,6 +1,12 @@
 import yaml
 import os
 import asyncio
+import sys
+import signal
+import sqlite3
+import threading
+import tkinter as tk
+from tkinter import messagebox
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -13,17 +19,66 @@ from aiogram.types import (
 )
 from aiogram.enums import ChatAction
 from aiogram.client.default import DefaultBotProperties
+from datetime import datetime, time
+import logging
 
-# Загрузка конфига
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+bot_running = True
+bot_task = None
+dp = Dispatcher()  
+
+
 with open("config.yml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-# Инициализация бота с HTML по умолчанию
+try:
+    with open("auto_message.yml", "r", encoding="utf-8") as f:
+        auto_messages = yaml.safe_load(f) or {}
+except FileNotFoundError:
+    logger.warning("Файл auto_message.yml не найден, рассылка отключена")
+    auto_messages = {}
+
 bot = Bot(
     token=config["bot"]["token"],
     default=DefaultBotProperties(parse_mode="HTML")
 )
-dp = Dispatcher()
+
+def init_db():
+    with sqlite3.connect("users.db") as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                chat_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                date_added TEXT
+            )
+        """)
+
+init_db()
+
+def save_user(chat_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    with sqlite3.connect("users.db") as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO users 
+            (chat_id, username, first_name, last_name, date_added)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (chat_id, username, first_name, last_name, datetime.now().isoformat())
+        )
+
+def get_all_users() -> list[int]:
+    with sqlite3.connect("users.db") as conn:
+        cursor = conn.execute("SELECT chat_id FROM users")
+        return [row[0] for row in cursor.fetchall()]
 
 def get_reply_keyboard(buttons):
     if not buttons:
@@ -33,31 +88,31 @@ def get_reply_keyboard(buttons):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-
+for cmd in config["commands"]:
+    if cmd.startswith('/'):
+        cmd_name = cmd[1:]  
+        
+        @dp.message(Command(cmd_name))
+        async def handle_command(message: types.Message, cmd=cmd):
+            await process_command(message.chat.id, config["commands"][cmd])
 def get_inline_keyboard(buttons):
     if not buttons:
         return None
     
     keyboard = []
     for btn in buttons:
-        # Если кнопка представлена как словарь (для URL или других параметров)
         if isinstance(btn, dict):
             if "url" in btn:
-                # URL-кнопка
                 keyboard.append([InlineKeyboardButton(text=btn["text"], url=btn["url"])])
-            # Можно добавить другие типы кнопок здесь, если нужно
         else:
-            # Обычная callback кнопка
             keyboard.append([InlineKeyboardButton(text=btn, callback_data=btn)])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-async def send_response(chat_id, data):
-    # Обработка задержки backup
+async def send_response(chat_id: int, data: dict):
     if "backup" in data:
         await asyncio.sleep(data["backup"])
     
-    # Обработка эффекта "печатает..."
     if "backup_print" in data:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
         await asyncio.sleep(data["backup_print"])
@@ -88,29 +143,193 @@ async def send_response(chat_id, data):
             reply_markup=reply_markup
         )
 
-async def process_command(chat_id, command_data):
+async def process_command(chat_id: int, command_data):
     if isinstance(command_data, list):
-        # Если команда содержит несколько сообщений
         for message_data in command_data:
             await send_response(chat_id, message_data)
     else:
-        # Одиночное сообщение
         await send_response(chat_id, command_data)
+
+async def interval_broadcast(interval: int, message_data: dict):
+    while bot_running:
+        try:
+            users = get_all_users()
+            logger.info(f"Начинаем интервальную рассылку для {len(users)} пользователей")
+            
+            for chat_id in users:
+                try:
+                    await process_command(chat_id, message_data)
+                    logger.debug(f"Сообщение отправлено в {chat_id}")
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+            
+            logger.info(f"Интервальная рассылка завершена. Ожидаем {interval} сек.")
+            for _ in range(interval):
+                if not bot_running:
+                    break
+                await asyncio.sleep(1)
+            
+        except Exception as e:
+            logger.error(f"Критическая ошибка в интервальной рассылке: {str(e)}")
+            await asyncio.sleep(60)
+
+async def time_broadcast(broadcast_time: str, message_data: dict):
+    while bot_running:
+        try:
+            now = datetime.now().time()
+            target_time = time.fromisoformat(broadcast_time)
+            
+            now_datetime = datetime.now()
+            target_datetime = datetime.combine(now_datetime.date(), target_time)
+            
+            if now > target_time:
+                target_datetime = target_datetime.replace(day=target_datetime.day + 1)
+            
+            wait_seconds = (target_datetime - now_datetime).total_seconds()
+            logger.info(f"Следующая рассылка в {broadcast_time} через {wait_seconds:.0f} секунд")
+            
+            for _ in range(int(wait_seconds)):
+                if not bot_running:
+                    return
+                await asyncio.sleep(1)
+            
+            users = get_all_users()
+            logger.info(f"Начинаем рассылку в {broadcast_time} для {len(users)} пользователей")
+            
+            for chat_id in users:
+                try:
+                    await process_command(chat_id, message_data)
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+            
+            logger.info(f"Рассылка в {broadcast_time} завершена")
+            
+        except Exception as e:
+            logger.error(f"Критическая ошибка во временной рассылке: {str(e)}")
+            await asyncio.sleep(60)
+
+async def setup_broadcasts():
+    if not auto_messages:
+        logger.info("Нет сообщений для рассылки")
+        return
+    
+    for message_name, message_config in auto_messages.items():
+        try:
+            if "interval" in message_config:
+                asyncio.create_task(
+                    interval_broadcast(message_config["interval"], message_config["message"])
+                )
+                logger.info(f"Запущена интервальная рассылка '{message_name}' каждые {message_config['interval']} секунд")
+            
+            elif "time" in message_config:
+                asyncio.create_task(
+                    time_broadcast(message_config["time"], message_config["message"])
+                )
+                logger.info(f"Запущена временная рассылка '{message_name}' в {message_config['time']}")
+            
+            else:
+                logger.warning(f"Неизвестный тип рассылки для сообщения '{message_name}'")
+        
+        except Exception as e:
+            logger.error(f"Ошибка настройки рассылки '{message_name}': {str(e)}")
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    save_user(
+        message.chat.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message.from_user.last_name
+    )
+    
     if "/start" in config["commands"]:
         await process_command(message.chat.id, config["commands"]["/start"])
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    if "/help" in config["commands"]:
-        await process_command(message.chat.id, config["commands"]["/help"])
-    else:
-        await send_response(message.chat.id, {"text": "Команда /help не настроена"})
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        users_count = len(get_all_users())
+        await message.answer(f"📊 Статистика бота:\n"
+                           f"• Всего пользователей: {users_count}")
 
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: types.Message):
+    if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
+        if len(message.text.split()) > 1:
+            text = ' '.join(message.text.split()[1:])
+            users = get_all_users()
+            await message.answer(f"Начинаю рассылку сообщения для {len(users)} пользователей...")
+            
+            success = 0
+            failed = 0
+            
+            for chat_id in users:
+                try:
+                    await bot.send_message(chat_id, text)
+                    success += 1
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
+            
+            await message.answer(f"Рассылка завершена:\n"
+                               f"• Успешно: {success}\n"
+                               f"• Не удалось: {failed}")
+
+
+@dp.message(F.text.in_(config.get("buttons", {}).keys()))
+async def handle_reply_buttons(message: types.Message):
+    save_user(
+        message.chat.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message.from_user.last_name
+    )
+    await process_command(message.chat.id, config["buttons"][message.text])
+
+@dp.callback_query(F.data.in_(config.get("buttons", {}).keys()))
+async def handle_inline_buttons(callback: types.CallbackQuery):
+    await callback.answer()
+    
+    save_user(
+        callback.message.chat.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.from_user.last_name
+    )
+    
+    button_data = config["buttons"][callback.data]
+    if not (isinstance(button_data, dict) and "url" in button_data):
+        await process_command(callback.message.chat.id, button_data)
+
+@dp.callback_query()
+async def handle_all_inline_buttons(callback: types.CallbackQuery):
+    await callback.answer()
+    
+    save_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.from_user.last_name
+    )
+    
+    if callback.data in config.get("buttons", {}):
+        button_data = config["buttons"][callback.data]
+        if not (isinstance(button_data, dict) and "url" in button_data):
+            await process_command(callback.message.chat.id, button_data)
+    else:
+        await callback.message.answer("Кнопка не настроена")
 @dp.message()
 async def handle_unknown(message: types.Message):
+    save_user(
+        message.chat.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message.from_user.last_name
+    )
+    
     if message.text.startswith('/'):
         await send_response(
             message.chat.id,
@@ -121,22 +340,87 @@ async def handle_unknown(message: types.Message):
             message.chat.id,
             config.get("unknown_message", {"text": "Пожалуйста, используйте команды из меню"})
         )
+async def register_commands_handlers():
+    for cmd, cmd_data in config["commands"].items():
+        if cmd.startswith('/'):
+            command = cmd[1:]  
+            
+            @dp.message(Command(command))
+            async def command_handler(message: types.Message, cmd=cmd):
+                await process_command(message.chat.id, config["commands"][cmd])
+async def on_startup():
+    logger.info("Бот запущен!")
+    await setup_broadcasts()
+    await set_bot_commands()
 
-@dp.message(F.text.in_(config.get("buttons", {}).keys()))
-async def handle_reply_buttons(message: types.Message):
-    await process_command(message.chat.id, config["buttons"][message.text])
+async def set_bot_commands():
+    commands = []
+    for cmd, data in config["commands"].items():
+        if cmd.startswith('/') and "description" in data:
+            command = cmd.lstrip('/')  # Убираем слеш для API
+            description = data["description"]
+            commands.append(types.BotCommand(command=command, description=description))
+    
+    if commands:
+        await bot.set_my_commands(commands)
+        logger.info("Команды бота обновлены")
+def create_gui():
+    def stop_bot():
+        global bot_running
+        if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите остановить бота?"):
+            bot_running = False
+            root.destroy()
+            if 'loop' in globals():
+                loop.call_soon_threadsafe(loop.stop)
 
-@dp.callback_query(F.data.in_(config.get("buttons", {}).keys()))
-async def handle_inline_buttons(callback: types.CallbackQuery):
-    # Проверяем, является ли callback_data URL-ссылкой
-    button_data = config["buttons"].get(callback.data, {})
-    if isinstance(button_data, dict) and "url" in button_data:
-        # Для URL просто отвечаем на callback, чтобы убрать часики
-        await callback.answer()
-    else:
-        await process_command(callback.message.chat.id, button_data)
-        await callback.answer()
+            os.kill(os.getpid(), signal.SIGTERM)
+    
+    root = tk.Tk()
+    root.title("Управление ботом")
+    root.geometry("300x150")
+    
+    status_label = tk.Label(root, text="Статус: Бот запущен", fg="green")
+    status_label.pack(pady=10)
+    
+    stop_button = tk.Button(root, text="Остановить бота", command=stop_bot, bg="red", fg="white")
+    stop_button.pack(pady=20)
+    
+    root.protocol("WM_DELETE_WINDOW", stop_bot)
+    root.mainloop()
+    
+async def run_bot():
+    global loop  
+    loop = asyncio.get_event_loop()
+    dp.startup.register(on_startup)
+    
+    try:
+        await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await bot.session.close()
+
+def start_bot():
+    global bot_task
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        bot_task = loop.run_until_complete(run_bot())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
+        sys.exit(0)
 
 if __name__ == "__main__":
-    print("Бот запущен с поддержкой HTML!")
-    dp.run_polling(bot)
+    gui_thread = threading.Thread(target=create_gui, daemon=True)
+    gui_thread.start()
+    
+    try:
+        start_bot()
+    except SystemExit:
+        os._exit(0)
+    
+    logger.info("Бот остановлен")
+    os._exit(0)
