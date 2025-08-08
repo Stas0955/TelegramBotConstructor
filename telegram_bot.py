@@ -4,8 +4,7 @@ import asyncio
 import sys
 import signal
 import threading
-import tkinter as tk
-from tkinter import messagebox
+from typing import List, Dict, Set, Optional  # и другие типы по необходимости
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -79,7 +78,7 @@ def save_user(chat_id: int, username: str = None, first_name: str = None, last_n
         for user in users:
             f.write(f"{user}\n")
 
-def get_all_users() -> list[int]:
+def get_all_users() -> List[int]:
     active_users = []
     if os.path.exists("users.txt"):
         with open("users.txt", "r", encoding="utf-8") as f:
@@ -596,30 +595,6 @@ async def set_bot_commands():
         await bot.set_my_commands(commands)
         logger.info("Команды бота обновлены")
 
-def create_gui():
-    def stop_bot():
-        global bot_running
-        if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите остановить бота?"):
-            bot_running = False
-            root.destroy()
-
-            if 'loop' in globals():
-                loop.call_soon_threadsafe(loop.stop)
-
-            os.kill(os.getpid(), signal.SIGTERM)
-
-    root = tk.Tk()
-    root.title("Управление ботом")
-    root.geometry("300x150")
-
-    status_label = tk.Label(root, text="Статус: Бот запущен", fg="green")
-    status_label.pack(pady=10)
-
-    stop_button = tk.Button(root, text="Остановить бота", command=stop_bot, bg="red", fg="white")
-    stop_button.pack(pady=20)
-
-    root.protocol("WM_DELETE_WINDOW", stop_bot)
-    root.mainloop()
 
 async def run_bot():
     global loop  
@@ -647,9 +622,6 @@ def start_bot():
         sys.exit(0)
 
 if __name__ == "__main__":
-    gui_thread = threading.Thread(target=create_gui, daemon=True)
-    gui_thread.start()
-
     try:
         start_bot()
     except SystemExit:
