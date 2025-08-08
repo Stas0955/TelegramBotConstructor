@@ -4,7 +4,7 @@ import asyncio
 import sys
 import signal
 import threading
-from typing import List, Dict, Set, Optional  # и другие типы по необходимости
+from typing import List, Dict, Set, Optional  
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -188,13 +188,15 @@ async def send_response(chat_id: int, data: dict):
             chat_id=chat_id,
             photo=media.media,
             caption=media.caption,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="HTML"
         )
     elif text:
         await bot.send_message(
             chat_id=chat_id,
             text=text,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="HTML"
         )
 
 async def process_command(chat_id: int, command_data):
@@ -315,7 +317,22 @@ async def cmd_template_message(message: types.Message):
         await message.answer(f"❌ Шаблон <code>{template_name}</code> не найден", parse_mode="HTML")
         return
 
-    message_data = template_messages[template_name]
+    template_data = template_messages[template_name]
+
+    if "broadcast" in template_data:
+        broadcast_config = template_data["broadcast"]
+        message_data = template_data["message"] if "message" in template_data else template_data
+
+        if "interval" in broadcast_config:
+            info_text = f"🔹 Интервал: каждые {broadcast_config['interval']} секунд"
+        elif "time" in broadcast_config:
+            info_text = f"🔹 Время рассылки: {broadcast_config['time']}"
+        else:
+            info_text = "🔹 Однократная рассылка"
+    else:
+        message_data = template_data
+        info_text = "🔹 Однократная рассылка"
+
     users = get_all_users()
     total_users = len(users)
 
@@ -324,9 +341,12 @@ async def cmd_template_message(message: types.Message):
         [InlineKeyboardButton(text="❌ Отменить", callback_data="broadcast_cancel")]
     ])
 
-    preview_text = message_data.get("text", "[Сообщение без текста]")[:200]
+    preview_text = message_data.get("text", "[Сообщение без текста]")
+    preview_text = preview_text.replace("<", "&lt;").replace(">", "&gt;")[:200]  
+
     await message.answer(
         f"📨 Подтвердите рассылку шаблона <b>{template_name}</b>\n"
+        f"{info_text}\n"
         f"🔹 Пользователей: {total_users}\n"
         f"🔹 Предпросмотр: {preview_text}...\n\n"
         "Вы уверены, что хотите начать рассылку?",
@@ -342,27 +362,114 @@ async def confirm_broadcast(callback: types.CallbackQuery):
         await callback.answer("❌ Шаблон больше не существует")
         return
 
-    message_data = template_messages[template_name]
+    template_data = template_messages[template_name]
+
+    if "broadcast" in template_data:
+        broadcast_config = template_data["broadcast"]
+        message_data = template_data["message"] if "message" in template_data else template_data
+
+        if "interval" in broadcast_config:
+
+            asyncio.create_task(interval_broadcast(broadcast_config["interval"], message_data))
+            await callback.message.edit_text(
+                f"🔄 Запущена интервальная рассылка шаблона '<b>{template_name}</b>'\n"
+                f"🔹 Интервал: каждые {broadcast_config['interval']} секунд",
+                parse_mode="HTML"
+            )
+        elif "time" in broadcast_config:
+
+            asyncio.create_task(time_broadcast(broadcast_config["time"], message_data))
+            await callback.message.edit_text(
+                f"🕒 Запущена временная рассылка шаблона '<b>{template_name}</b>'\n"
+                f"🔹 Время рассылки: {broadcast_config['time']}",
+                parse_mode="HTML"
+            )
+        else:
+
+            await send_template_to_all_users(template_name, message_data, callback.message)
+    else:
+
+        await send_template_to_all_users(template_name, template_data, callback.message)
+
+    await callback.answer()
+
+async def prepare_message_data(message_data: dict) -> dict:
+    """Подготавливает данные сообщения, идентично scheduled рассылкам"""
+
+    prepared_data = message_data.copy()
+
+    if 'text' in prepared_data:
+        text = prepared_data['text']
+
+        replacements = {
+            '<b>': '__TAG_B_OPEN__', '</b>': '__TAG_B_CLOSE__',
+            '<i>': '__TAG_I_OPEN__', '</i>': '__TAG_I_CLOSE__',
+            '<u>': '__TAG_U_OPEN__', '</u>': '__TAG_U_CLOSE__',
+            '<s>': '__TAG_S_OPEN__', '</s>': '__TAG_S_CLOSE__',
+            '<code>': '__TAG_CODE_OPEN__', '</code>': '__TAG_CODE_CLOSE__',
+            '<pre>': '__TAG_PRE_OPEN__', '</pre>': '__TAG_PRE_CLOSE__',
+            '<blockquote>': '__TAG_BQ_OPEN__', '</blockquote>': '__TAG_BQ_CLOSE__'
+        }
+
+        for original, temp in replacements.items():
+            text = text.replace(original, temp)
+
+        text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        for original, temp in replacements.items():
+            text = text.replace(temp, original)
+
+        prepared_data['text'] = text
+        prepared_data['parse_mode'] = 'HTML'
+
+    return prepared_data
+
+async def send_template_to_all_users(template_name: str, message_data: dict, message: types.Message):
+    """Отправляет шаблон всем пользователям, идентично scheduled"""
     users = get_all_users()
     total_users = len(users)
 
-    await callback.message.edit_text(f"⏳ Начинаю рассылку шаблона '{template_name}'...")
-    await callback.answer()
+    await message.edit_text(f"⏳ Начинаю рассылку шаблона '<b>{template_name}</b>'...", parse_mode="HTML")
 
     success = 0
     failed = 0
 
     for i, chat_id in enumerate(users, 1):
         try:
-            await process_command(chat_id, message_data)
+
+            prepared_data = await prepare_message_data(message_data)
+
+            if 'image' in prepared_data and os.path.exists(prepared_data['image']):
+                media = InputMediaPhoto(
+                    media=FSInputFile(prepared_data['image']),
+                    caption=prepared_data.get('text', ''),
+                    parse_mode='HTML'
+                )
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=media.media,
+                    caption=media.caption,
+                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or 
+                              get_inline_keyboard(prepared_data.get('inline_buttons'))
+                )
+            elif prepared_data.get('text'):
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=prepared_data['text'],
+                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or 
+                              get_inline_keyboard(prepared_data.get('inline_buttons')),
+                    parse_mode='HTML'
+                )
+
             success += 1
 
             if i % 10 == 0:
-                await callback.message.edit_text(
-                    f"📨 Рассылка шаблона '{template_name}'\n"
+                await message.edit_text(
+                    f"📨 Рассылка шаблона '<b>{template_name}</b>'\n"
                     f"✅ Успешно: {success}\n"
                     f"❌ Ошибок: {failed}\n"
-                    f"🔹 Всего: {i}/{total_users}"
+                    f"🔹 Всего: {i}/{total_users}",
+                    parse_mode="HTML"
                 )
 
             await asyncio.sleep(0.1)
@@ -370,11 +477,12 @@ async def confirm_broadcast(callback: types.CallbackQuery):
             failed += 1
             logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
 
-    await callback.message.edit_text(
-        f"✅ Рассылка шаблона '{template_name}' завершена:\n"
+    await message.edit_text(
+        f"✅ Рассылка шаблона '<b>{template_name}</b>' завершена:\n"
         f"• Успешно: {success}\n"
         f"• Не удалось: {failed}\n"
-        f"• Всего: {total_users}"
+        f"• Всего: {total_users}",
+        parse_mode="HTML"
     )
 
 @dp.callback_query(F.data == "broadcast_cancel")
@@ -446,12 +554,14 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
                 await bot.send_photo(
                     chat_id=chat_id,
                     photo=message.photo[-1].file_id,
-                    caption=message.caption if message.caption else ""
+                    caption=message.caption if message.caption else "",
+                    parse_mode="HTML"
                 )
             elif message.text:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=message.text
+                    text=message.text,
+                    parse_mode="HTML"
                 )
             success += 1
             await asyncio.sleep(0.1)  
@@ -594,7 +704,6 @@ async def set_bot_commands():
     if commands:
         await bot.set_my_commands(commands)
         logger.info("Команды бота обновлены")
-
 
 async def run_bot():
     global loop  
