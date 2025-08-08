@@ -3,7 +3,6 @@ import os
 import asyncio
 import sys
 import signal
-import sqlite3
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -43,7 +42,6 @@ with open("config.yml", "r", encoding="utf-8") as f:
 try:
     with open("auto_message.yml", "r", encoding="utf-8") as f:
         auto_messages = yaml.safe_load(f) or {}
-
         scheduled_messages = auto_messages.get("scheduled", {})
         template_messages = auto_messages.get("templates", {})
 except FileNotFoundError:
@@ -56,63 +54,92 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode="HTML")
 )
 
-def init_db():
-    with sqlite3.connect("users.db") as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                chat_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                date_added TEXT
-            )
-        """)
+def init_users_files():
+    if not os.path.exists("users.txt"):
+        with open("users.txt", "w", encoding="utf-8") as f:
+            pass
 
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass  
-
-init_db()
+    if not os.path.exists("blocked_users.txt"):
+        with open("blocked_users.txt", "w", encoding="utf-8") as f:
+            pass
 
 def save_user(chat_id: int, username: str = None, first_name: str = None, last_name: str = None):
-    with sqlite3.connect("users.db") as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO users 
-            (chat_id, username, first_name, last_name, date_added, is_blocked)
-            VALUES (?, ?, ?, ?, ?, 0)
-            """,
-            (chat_id, username, first_name, last_name, datetime.now().isoformat())
-        )
+
+    if is_user_blocked(chat_id):
+        return
+
+    users = set()
+    if os.path.exists("users.txt"):
+        with open("users.txt", "r", encoding="utf-8") as f:
+            users = set(line.strip() for line in f if line.strip())
+
+    users.add(str(chat_id))
+
+    with open("users.txt", "w", encoding="utf-8") as f:
+        for user in users:
+            f.write(f"{user}\n")
 
 def get_all_users() -> list[int]:
-    with sqlite3.connect("users.db") as conn:
-        cursor = conn.execute("SELECT chat_id FROM users WHERE is_blocked = 0")
-        return [row[0] for row in cursor.fetchall()]
+    active_users = []
+    if os.path.exists("users.txt"):
+        with open("users.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not is_user_blocked(int(line)):
+                    active_users.append(int(line))
+    return active_users
 
 def get_active_users_count() -> int:
-    with sqlite3.connect("users.db") as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 0")
-        return cursor.fetchone()[0]
+    return len(get_all_users())
 
 def get_total_users_count() -> int:
-    with sqlite3.connect("users.db") as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM users")
-        return cursor.fetchone()[0]
+    count = 0
+    if os.path.exists("users.txt"):
+        with open("users.txt", "r", encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+    return count
 
 def get_blocked_users_count() -> int:
-    with sqlite3.connect("users.db") as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM users WHERE is_blocked = 1")
-        return cursor.fetchone()[0]
+    count = 0
+    if os.path.exists("blocked_users.txt"):
+        with open("blocked_users.txt", "r", encoding="utf-8") as f:
+            count = sum(1 for line in f if line.strip())
+    return count
 
 def block_user(chat_id: int):
-    with sqlite3.connect("users.db") as conn:
-        conn.execute("UPDATE users SET is_blocked = 1 WHERE chat_id = ?", (chat_id,))
+
+    blocked = set()
+    if os.path.exists("blocked_users.txt"):
+        with open("blocked_users.txt", "r", encoding="utf-8") as f:
+            blocked = set(line.strip() for line in f if line.strip())
+
+    blocked.add(str(chat_id))
+
+    with open("blocked_users.txt", "w", encoding="utf-8") as f:
+        for user in blocked:
+            f.write(f"{user}\n")
 
 def unblock_user(chat_id: int):
-    with sqlite3.connect("users.db") as conn:
-        conn.execute("UPDATE users SET is_blocked = 0 WHERE chat_id = ?", (chat_id,))
+
+    blocked = set()
+    if os.path.exists("blocked_users.txt"):
+        with open("blocked_users.txt", "r", encoding="utf-8") as f:
+            blocked = set(line.strip() for line in f if line.strip())
+
+    blocked.discard(str(chat_id))
+
+    with open("blocked_users.txt", "w", encoding="utf-8") as f:
+        for user in blocked:
+            f.write(f"{user}\n")
+
+def is_user_blocked(chat_id: int) -> bool:
+    if not os.path.exists("blocked_users.txt"):
+        return False
+
+    with open("blocked_users.txt", "r", encoding="utf-8") as f:
+        return str(chat_id) in [line.strip() for line in f if line.strip()]
+
+init_users_files()
 
 def get_reply_keyboard(buttons):
     if not buttons:
@@ -265,14 +292,12 @@ async def setup_broadcasts():
 
 @dp.message(Command("m"))
 async def cmd_template_message(message: types.Message):
-
     if not (config.get("admin_ids") and message.from_user.id in config["admin_ids"]):
         await message.answer("⛔ У вас нет прав для этой команды")
         return
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-
         if not template_messages:
             await message.answer("ℹ️ Нет доступных шаблонов сообщений")
             return
@@ -369,6 +394,7 @@ async def cmd_start(message: types.Message):
 
     if "/start" in config["commands"]:
         await process_command(message.chat.id, config["commands"]["/start"])
+
 def register_commands():
     for cmd in config["commands"]:
         if cmd.startswith('/'):
@@ -389,7 +415,6 @@ register_commands()
 
 @dp.message(Command("msg"))
 async def cmd_msg(message: types.Message, state: FSMContext):
-
     if config.get("admin_ids") and message.from_user.id in config["admin_ids"]:
         await message.answer(
             "📢 Введите сообщение для рассылки:\n"
@@ -419,14 +444,12 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     for chat_id in users:
         try:
             if message.photo:
-
                 await bot.send_photo(
                     chat_id=chat_id,
                     photo=message.photo[-1].file_id,
                     caption=message.caption if message.caption else ""
                 )
             elif message.text:
-
                 await bot.send_message(
                     chat_id=chat_id,
                     text=message.text
@@ -503,7 +526,6 @@ async def handle_reply_buttons(message: types.Message):
 
 @dp.callback_query(F.data.in_(config.get("buttons", {}).keys()))
 async def handle_inline_buttons(callback: types.CallbackQuery):
-
     await callback.answer()
 
     save_user(
@@ -520,7 +542,6 @@ async def handle_inline_buttons(callback: types.CallbackQuery):
 
 @dp.callback_query()
 async def handle_all_inline_buttons(callback: types.CallbackQuery):
-
     await callback.answer()
 
     save_user(
@@ -536,7 +557,6 @@ async def handle_all_inline_buttons(callback: types.CallbackQuery):
         if not (isinstance(button_data, dict) and "url" in button_data):
             await process_command(callback.message.chat.id, button_data)
     else:
-
         await callback.message.answer("Кнопка не настроена")
 
 @dp.message()
@@ -565,7 +585,6 @@ async def on_startup():
     await set_bot_commands()
 
 async def set_bot_commands():
-
     commands = []
     for cmd, data in config["commands"].items():
         if cmd.startswith('/') and "description" in data:
@@ -582,7 +601,6 @@ def create_gui():
         global bot_running
         if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите остановить бота?"):
             bot_running = False
-
             root.destroy()
 
             if 'loop' in globals():
@@ -629,7 +647,6 @@ def start_bot():
         sys.exit(0)
 
 if __name__ == "__main__":
-
     gui_thread = threading.Thread(target=create_gui, daemon=True)
     gui_thread.start()
 
