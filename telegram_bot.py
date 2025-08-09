@@ -2,12 +2,15 @@ import yaml
 import os
 import asyncio
 import sys
-import signal
-import threading
-from typing import List, Dict, Set, Optional  
-from aiogram import Bot, Dispatcher, types, F
+import logging
+from datetime import datetime, time
+from typing import List, Dict, Set, Optional, Callable, Awaitable, Any, Union
+
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.types import (
+    Message,
+    CallbackQuery,
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
@@ -19,8 +22,6 @@ from aiogram.enums import ChatAction
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from datetime import datetime, time
-import logging
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,6 +55,7 @@ bot = Bot(
 )
 
 def init_users_files():
+    """Инициализация файлов с пользователями"""
     if not os.path.exists("users.txt"):
         with open("users.txt", "w", encoding="utf-8") as f:
             pass
@@ -106,7 +108,7 @@ def get_blocked_users_count() -> int:
     return count
 
 def block_user(chat_id: int):
-
+    """Блокировка пользователя"""
     blocked = set()
     if os.path.exists("blocked_users.txt"):
         with open("blocked_users.txt", "r", encoding="utf-8") as f:
@@ -119,7 +121,7 @@ def block_user(chat_id: int):
             f.write(f"{user}\n")
 
 def unblock_user(chat_id: int):
-
+    """Разблокировка пользователя"""
     blocked = set()
     if os.path.exists("blocked_users.txt"):
         with open("blocked_users.txt", "r", encoding="utf-8") as f:
@@ -132,11 +134,74 @@ def unblock_user(chat_id: int):
             f.write(f"{user}\n")
 
 def is_user_blocked(chat_id: int) -> bool:
+    """Проверка, заблокирован ли пользователь"""
     if not os.path.exists("blocked_users.txt"):
         return False
 
     with open("blocked_users.txt", "r", encoding="utf-8") as f:
         return str(chat_id) in [line.strip() for line in f if line.strip()]
+
+async def check_user_blocked_middleware(
+    handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+    event: Union[Message, CallbackQuery],
+    data: Dict[str, Any]
+) -> Any:
+    """Middleware для проверки блокировки пользователя"""
+    if is_user_blocked(event.from_user.id):
+
+        blocked_msg = config.get(
+            "blocked_message",
+            {
+                "text": "⛔ Вы заблокированы и не можете взаимодействовать с ботом",
+                "parse_mode": "HTML"
+            }
+        )
+
+        if isinstance(blocked_msg, str):
+            blocked_msg = {"text": blocked_msg, "parse_mode": "HTML"}
+        elif "parse_mode" not in blocked_msg:
+            blocked_msg["parse_mode"] = "HTML"
+
+        if isinstance(event, Message):
+            await event.answer(**blocked_msg)
+        elif isinstance(event, CallbackQuery):
+            await event.message.answer(**blocked_msg)
+            await event.answer()  
+
+        return  
+
+    return await handler(event, data)
+class BlockCheckMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+        event: Union[Message, CallbackQuery],
+        data: Dict[str, Any]
+    ) -> Any:
+        if is_user_blocked(event.from_user.id):
+
+            blocked_msg = config.get(
+                "blocked_message",
+                {
+                    "text": "⛔ Вы заблокированы!",
+                    "parse_mode": "HTML"
+                }
+            )
+
+            if isinstance(blocked_msg, str):
+                blocked_msg = {"text": blocked_msg, "parse_mode": "HTML"}
+            elif "parse_mode" not in blocked_msg:
+                blocked_msg["parse_mode"] = "HTML"
+
+            if isinstance(event, Message):
+                await event.answer(**blocked_msg)
+            elif isinstance(event, CallbackQuery):
+                await event.message.answer(**blocked_msg)
+                await event.answer()
+
+            return
+
+        return await handler(event, data)
 
 init_users_files()
 
@@ -490,6 +555,11 @@ async def cancel_broadcast(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ Рассылка отменена")
     await callback.answer()
 
+dp = Dispatcher()
+
+dp.message.middleware(BlockCheckMiddleware())
+dp.callback_query.middleware(BlockCheckMiddleware())
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     save_user(
@@ -687,6 +757,8 @@ async def handle_unknown(message: types.Message):
             message.chat.id,
             config.get("unknown_message", {"text": "Пожалуйста, используйте команды из меню"})
         )
+
+dp.message.middleware(check_user_blocked_middleware)
 
 async def on_startup():
     logger.info("Бот запущен!")
