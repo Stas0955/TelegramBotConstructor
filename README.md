@@ -1,7 +1,7 @@
 # Данный конструктор бота позволит вам создать своего Telegram бота с кнопками
 
 
-<img width="1000" height="500" alt="Image" src="https://github.com/user-attachments/assets/98d0aa61-1251-4e20-83b8-2513dacd6e00" />
+<img width="1000" height="500" alt="sdfdsfd" src="https://github.com/user-attachments/assets/8e629f19-6e80-42b3-84a8-cf4e0f1987d0" />
 
 
 ### Что вы сможете создать?
