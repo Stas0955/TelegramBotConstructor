@@ -31,7 +31,43 @@ logger = logging.getLogger(__name__)
 
 bot_running = True
 bot_task = None
-dp = Dispatcher()  
+
+class BlockCheckMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+        event: Union[Message, CallbackQuery],
+        data: Dict[str, Any]
+    ) -> Any:
+        if is_user_blocked(event.from_user.id):
+
+            blocked_msg = config.get(
+                "blocked_message",
+                {
+                    "text": "⛔ Вы заблокированы!",
+                    "parse_mode": "HTML"
+                }
+            )
+
+            if isinstance(blocked_msg, str):
+                blocked_msg = {"text": blocked_msg, "parse_mode": "HTML"}
+            elif "parse_mode" not in blocked_msg:
+                blocked_msg["parse_mode"] = "HTML"
+
+            if isinstance(event, Message):
+                await event.answer(**blocked_msg)
+            elif isinstance(event, CallbackQuery):
+                await event.message.answer(**blocked_msg)
+                await event.answer()
+
+            return
+
+        return await handler(event, data)
+
+dp = Dispatcher()
+
+dp.message.middleware(BlockCheckMiddleware())
+dp.callback_query.middleware(BlockCheckMiddleware())
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
@@ -140,68 +176,16 @@ def is_user_blocked(chat_id: int) -> bool:
 
     with open("blocked_users.txt", "r", encoding="utf-8") as f:
         return str(chat_id) in [line.strip() for line in f if line.strip()]
-
-async def check_user_blocked_middleware(
-    handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-    event: Union[Message, CallbackQuery],
-    data: Dict[str, Any]
-) -> Any:
+async def check_user_blocked_middleware(handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+                                      event: Message,
+                                      data: Dict[str, Any]) -> Any:
     """Middleware для проверки блокировки пользователя"""
     if is_user_blocked(event.from_user.id):
-
-        blocked_msg = config.get(
-            "blocked_message",
-            {
-                "text": "⛔ Вы заблокированы и не можете взаимодействовать с ботом",
-                "parse_mode": "HTML"
-            }
-        )
-
-        if isinstance(blocked_msg, str):
-            blocked_msg = {"text": blocked_msg, "parse_mode": "HTML"}
-        elif "parse_mode" not in blocked_msg:
-            blocked_msg["parse_mode"] = "HTML"
-
-        if isinstance(event, Message):
-            await event.answer(**blocked_msg)
-        elif isinstance(event, CallbackQuery):
-            await event.message.answer(**blocked_msg)
-            await event.answer()  
-
-        return  
-
+        blocked_message = config.get("blocked_message", 
+                                   {"text": "⛔ Вы заблокированы и не можете взаимодействовать с ботом"})
+        await event.answer(**blocked_message)
+        return
     return await handler(event, data)
-class BlockCheckMiddleware(BaseMiddleware):
-    async def __call__(
-        self,
-        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-        event: Union[Message, CallbackQuery],
-        data: Dict[str, Any]
-    ) -> Any:
-        if is_user_blocked(event.from_user.id):
-
-            blocked_msg = config.get(
-                "blocked_message",
-                {
-                    "text": "⛔ Вы заблокированы!",
-                    "parse_mode": "HTML"
-                }
-            )
-
-            if isinstance(blocked_msg, str):
-                blocked_msg = {"text": blocked_msg, "parse_mode": "HTML"}
-            elif "parse_mode" not in blocked_msg:
-                blocked_msg["parse_mode"] = "HTML"
-
-            if isinstance(event, Message):
-                await event.answer(**blocked_msg)
-            elif isinstance(event, CallbackQuery):
-                await event.message.answer(**blocked_msg)
-                await event.answer()
-
-            return
-
-        return await handler(event, data)
 
 init_users_files()
 
@@ -554,11 +538,6 @@ async def send_template_to_all_users(template_name: str, message_data: dict, mes
 async def cancel_broadcast(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ Рассылка отменена")
     await callback.answer()
-
-dp = Dispatcher()
-
-dp.message.middleware(BlockCheckMiddleware())
-dp.callback_query.middleware(BlockCheckMiddleware())
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
