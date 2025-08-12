@@ -192,8 +192,17 @@ init_users_files()
 def get_reply_keyboard(buttons):
     if not buttons:
         return None
+
+    keyboard = []
+
+    if isinstance(buttons, list) and all(isinstance(btn, str) for btn in buttons):
+        keyboard = [[KeyboardButton(text=btn)] for btn in buttons]
+
+    elif isinstance(buttons, list) and all(isinstance(row, list) for row in buttons):
+        keyboard = [[KeyboardButton(text=btn) for btn in row] for row in buttons]
+
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=btn)] for btn in buttons],
+        keyboard=keyboard,
         resize_keyboard=True,
         one_time_keyboard=True
     )
@@ -203,12 +212,25 @@ def get_inline_keyboard(buttons):
         return None
 
     keyboard = []
-    for btn in buttons:
-        if isinstance(btn, dict):
-            if "url" in btn:
-                keyboard.append([InlineKeyboardButton(text=btn["text"], url=btn["url"])])
-        else:
-            keyboard.append([InlineKeyboardButton(text=btn, callback_data=btn)])
+
+    if isinstance(buttons, list) and not any(isinstance(btn, list) for btn in buttons):
+        for btn in buttons:
+            if isinstance(btn, dict):
+                if "url" in btn:
+                    keyboard.append([InlineKeyboardButton(text=btn["text"], url=btn["url"])])
+            else:
+                keyboard.append([InlineKeyboardButton(text=btn, callback_data=btn)])
+
+    else:
+        for row in buttons:
+            keyboard_row = []
+            for btn in row:
+                if isinstance(btn, dict):
+                    if "url" in btn:
+                        keyboard_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+                else:
+                    keyboard_row.append(InlineKeyboardButton(text=btn, callback_data=btn))
+            keyboard.append(keyboard_row)
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
