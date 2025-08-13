@@ -126,13 +126,21 @@ payments: #Новый блок
       Спасибо за покупку
     inline_buttons: ["Назад"] #Можно добавить кнопки
     payload: "star_payment_12345" #Название операции
+
     stars: 1 #Количество звезд 
 
 #Как сделать кнопку оплаты в сообщениях от бота?
 /buy:
-    text: "Хотите купить 10 звёзд?"
-    inline_buttons: ["star_payment"] #Название кнопки это название операции из блока payments
+    inline_buttons: ["star_payment"] #Название кнопки это название операции из блока payments, данная кнопка сразу станет полным сообщением с оплатой
 ```
+Вот так кнопка станет полным сообщением оплаты
+
+<img width="209" height="114" alt="image" src="https://github.com/user-attachments/assets/e5a1d8a9-9f07-4db2-9425-6fa4d70c7b9a" />
+
+Вот так после нажатия кнопки оплатить
+
+<img width="322" height="282" alt="file1" src="https://github.com/user-attachments/assets/e6bb7f70-94d4-443c-8b7f-e3e9de330468" />
+
 ## Пример неизвестной команды - ответ от бота config.yml
 
 ```yml
@@ -140,6 +148,7 @@ unknown_message:
   text: "Извините, я не понимаю эту команду. Напишите /help для справки."
   backup_print: 1  # Задержка перед отправкой (имитация печати)
 ```
+
 ## Пример автоматичекий рассылки (переодичной) auto_message.yml
 
 ```yml
