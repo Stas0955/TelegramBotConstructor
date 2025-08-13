@@ -2,7 +2,9 @@ import yaml
 import os
 import asyncio
 import sys
+import sqlite3
 import logging
+from html import escape
 from datetime import datetime, time
 from typing import List, Dict, Set, Optional, Callable, Awaitable, Any, Union
 
@@ -90,44 +92,62 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode="HTML")
 )
 
-def init_users_files():
-    """Инициализация файлов с пользователями"""
-    if not os.path.exists("users.txt"):
-        with open("users.txt", "w", encoding="utf-8") as f:
-            pass
+DB_PATH = "users.db"
 
-    if not os.path.exists("blocked_users.txt"):
-        with open("blocked_users.txt", "w", encoding="utf-8") as f:
-            pass
+def init_users_files():
+    """Инициализация базы SQLite для хранения пользователей"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            chat_id INTEGER PRIMARY KEY
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_users (
+            chat_id INTEGER PRIMARY KEY
+        )
+    """)
+
+    conn.commit()
+    conn.close()
 
 def save_user(chat_id: int, username: str = None, first_name: str = None, last_name: str = None):
-
+    """Сохраняем пользователя, если он не заблокирован"""
     if is_user_blocked(chat_id):
         return
 
-    users = set()
-    if os.path.exists("users.txt"):
-        with open("users.txt", "r", encoding="utf-8") as f:
-            users = set(line.strip() for line in f if line.strip())
-
-    users.add(str(chat_id))
-
-    with open("users.txt", "w", encoding="utf-8") as f:
-        for user in users:
-            f.write(f"{user}\n")
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO users (chat_id) VALUES (?)", (chat_id,))
+    conn.commit()
+    conn.close()
 
 def get_all_users() -> List[int]:
-    active_users = []
-    if os.path.exists("users.txt"):
-        with open("users.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not is_user_blocked(int(line)):
-                    active_users.append(int(line))
-    return active_users
+    """Список всех активных пользователей (не заблокированных)"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT chat_id FROM users
+        WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 def get_active_users_count() -> int:
-    return len(get_all_users())
+    """Количество активных пользователей"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM users
+        WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
+    """)
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
 
 def get_total_users_count() -> int:
     count = 0
@@ -136,46 +156,50 @@ def get_total_users_count() -> int:
             count = sum(1 for line in f if line.strip())
     return count
 
+def get_total_users_count() -> int:
+    """Общее количество пользователей"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
 def get_blocked_users_count() -> int:
-    count = 0
-    if os.path.exists("blocked_users.txt"):
-        with open("blocked_users.txt", "r", encoding="utf-8") as f:
-            count = sum(1 for line in f if line.strip())
+    """Количество заблокированных пользователей"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM blocked_users")
+    count = cur.fetchone()[0]
+    conn.close()
     return count
 
 def block_user(chat_id: int):
     """Блокировка пользователя"""
-    blocked = set()
-    if os.path.exists("blocked_users.txt"):
-        with open("blocked_users.txt", "r", encoding="utf-8") as f:
-            blocked = set(line.strip() for line in f if line.strip())
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
 
-    blocked.add(str(chat_id))
-
-    with open("blocked_users.txt", "w", encoding="utf-8") as f:
-        for user in blocked:
-            f.write(f"{user}\n")
+    cur.execute("INSERT OR IGNORE INTO blocked_users (chat_id) VALUES (?)", (chat_id,))
+    conn.commit()
+    conn.close()
 
 def unblock_user(chat_id: int):
     """Разблокировка пользователя"""
-    blocked = set()
-    if os.path.exists("blocked_users.txt"):
-        with open("blocked_users.txt", "r", encoding="utf-8") as f:
-            blocked = set(line.strip() for line in f if line.strip())
-
-    blocked.discard(str(chat_id))
-
-    with open("blocked_users.txt", "w", encoding="utf-8") as f:
-        for user in blocked:
-            f.write(f"{user}\n")
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM blocked_users WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
 
 def is_user_blocked(chat_id: int) -> bool:
-    """Проверка, заблокирован ли пользователь"""
-    if not os.path.exists("blocked_users.txt"):
-        return False
+    """Проверка блокировки"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM blocked_users WHERE chat_id = ?", (chat_id,))
+    result = cur.fetchone()
+    conn.close()
+    return result is not None
 
-    with open("blocked_users.txt", "r", encoding="utf-8") as f:
-        return str(chat_id) in [line.strip() for line in f if line.strip()]
 async def check_user_blocked_middleware(handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
                                       event: Message,
                                       data: Dict[str, Any]) -> Any:
@@ -188,6 +212,27 @@ async def check_user_blocked_middleware(handler: Callable[[Message, Dict[str, An
     return await handler(event, data)
 
 init_users_files()
+
+def format_html_description(text: str) -> str:
+    """Форматирует описание для send_invoice с поддержкой HTML-тегов"""
+    replacements = {
+        '<b>': '__B_OPEN__', '</b>': '__B_CLOSE__',
+        '<i>': '__I_OPEN__', '</i>': '__I_CLOSE__',
+        '<u>': '__U_OPEN__', '</u>': '__U_CLOSE__',
+        '<s>': '__S_OPEN__', '</s>': '__S_CLOSE__',
+        '<code>': '__CODE_OPEN__', '</code>': '__CODE_CLOSE__',
+        '<pre>': '__PRE_OPEN__', '</pre>': '__PRE_CLOSE__',
+        '<blockquote>': '__BQ_OPEN__', '</blockquote>': '__BQ_CLOSE__'
+    }
+    for original, temp in replacements.items():
+        text = text.replace(original, temp)
+
+    text = escape(text)  
+
+    for original, temp in replacements.items():
+        text = text.replace(temp, original)
+
+    return text
 
 def get_reply_keyboard(buttons):
     if not buttons:
@@ -316,14 +361,13 @@ async def send_response(chat_id: int, data: dict):
     reply_markup = None
 
     if "inline_buttons" in data:
-
         for btn in (data["inline_buttons"] if isinstance(data["inline_buttons"], list) else []):
             if isinstance(btn, str) and btn in payments_cfg:
                 pay_cfg = payments_cfg[btn]
                 await bot.send_invoice(
                     chat_id=chat_id,
                     title=pay_cfg["title"],
-                    description=pay_cfg["description"],
+                    description=format_html_description(pay_cfg["description"]),
                     payload=pay_cfg["payload"],
                     currency="XTR",  
                     prices=[types.LabeledPrice(label=pay_cfg["title"], amount=pay_cfg["stars"])],
@@ -338,14 +382,10 @@ async def send_response(chat_id: int, data: dict):
         reply_markup = get_reply_keyboard(data["reply_buttons"])
 
     if "image" in data and os.path.exists(data["image"]):
-        media = InputMediaPhoto(
-            media=FSInputFile(data["image"]),
-            caption=text
-        )
         await bot.send_photo(
             chat_id=chat_id,
-            photo=media.media,
-            caption=media.caption,
+            photo=FSInputFile(data["image"]),
+            caption=text,
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
