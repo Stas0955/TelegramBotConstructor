@@ -956,6 +956,10 @@ async def handle_all_inline_buttons(callback: types.CallbackQuery):
 
 @dp.message()
 async def handle_unknown(message: types.Message):
+
+    if message.from_user.id == 777000:  
+        return
+
     save_user(
         message.chat.id,
         message.from_user.username,
@@ -963,12 +967,12 @@ async def handle_unknown(message: types.Message):
         message.from_user.last_name
     )
 
-    if message.text.startswith('/'):
+    if message.text and message.text.startswith('/'):
         await send_response(
             message.chat.id,
             config.get("unknown_message", {"text": "Неизвестная команда"})
         )
-    else:
+    elif message.text:  
         await send_response(
             message.chat.id,
             config.get("unknown_message", {"text": "Пожалуйста, используйте команды из меню"})
