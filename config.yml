@@ -6,6 +6,11 @@
 bot:
   token: "7687819421:AAFVtXzS4mOhueD4OVyzOTVI0gnXWrfwO64"  # Обязательно! Получить у @BotFather
 
+refund:
+   enabled: true
+   admin_only: true
+   disabled_message: "⛔ Возвраты временно отключены"
+
 blocked_message:
   text: |
     ⚠️ <b>Уведомление о блокировке</b>
@@ -130,6 +135,7 @@ buttons:
     image: "promo.jpg"
     backup_print: 2  # Имитируем печать 2 секунды
     inline_buttons: ["Основное меню"]
+
 
 
 
