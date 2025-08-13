@@ -195,11 +195,22 @@ def get_reply_keyboard(buttons):
 
     keyboard = []
 
-    if isinstance(buttons, list) and all(isinstance(btn, str) for btn in buttons):
-        keyboard = [[KeyboardButton(text=btn)] for btn in buttons]
+    if isinstance(buttons, list) and any(isinstance(row, list) for row in buttons):
+        for row in buttons:
+            if isinstance(row, list):
+                keyboard_row = []
+                for btn in row:
+                    if isinstance(btn, str):
+                        keyboard_row.append(KeyboardButton(text=btn))
+                if keyboard_row:
+                    keyboard.append(keyboard_row)
+            elif isinstance(row, str):
+                keyboard.append([KeyboardButton(text=row)])
 
-    elif isinstance(buttons, list) and all(isinstance(row, list) for row in buttons):
-        keyboard = [[KeyboardButton(text=btn) for btn in row] for row in buttons]
+    elif isinstance(buttons, list):
+        for btn in buttons:
+            if isinstance(btn, str):
+                keyboard.append([KeyboardButton(text=btn)])
 
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
@@ -212,29 +223,88 @@ def get_inline_keyboard(buttons):
         return None
 
     keyboard = []
+    payments_cfg = config.get("payments", {})
 
-    if isinstance(buttons, list) and not any(isinstance(btn, list) for btn in buttons):
+    if isinstance(buttons, list) and any(isinstance(row, list) for row in buttons):
+        for row in buttons:
+            if isinstance(row, list):
+                keyboard_row = []
+                for btn in row:
+                    if isinstance(btn, dict):
+                        if "url" in btn:
+                            keyboard_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+                        elif "callback_data" in btn:
+                            keyboard_row.append(InlineKeyboardButton(text=btn["text"], callback_data=btn["callback_data"]))
+                    elif isinstance(btn, str):
+                        if btn in payments_cfg:
+                            pay_cfg = payments_cfg[btn]
+                            keyboard_row.append(
+                                InlineKeyboardButton(
+                                    text=pay_cfg.get("title", "Оплатить"),
+                                    pay=True
+                                )
+                            )
+                        else:
+                            keyboard_row.append(InlineKeyboardButton(text=btn, callback_data=btn))
+                if keyboard_row:
+                    keyboard.append(keyboard_row)
+            elif isinstance(row, str):
+                if row in payments_cfg:
+                    pay_cfg = payments_cfg[row]
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            text=pay_cfg.get("title", "Оплатить"),
+                            pay=True
+                        )
+                    ])
+                else:
+                    keyboard.append([InlineKeyboardButton(text=row, callback_data=row)])
+
+    elif isinstance(buttons, list):
+        keyboard_row = []
         for btn in buttons:
             if isinstance(btn, dict):
                 if "url" in btn:
-                    keyboard.append([InlineKeyboardButton(text=btn["text"], url=btn["url"])])
-            else:
-                keyboard.append([InlineKeyboardButton(text=btn, callback_data=btn)])
-
-    else:
-        for row in buttons:
-            keyboard_row = []
-            for btn in row:
-                if isinstance(btn, dict):
-                    if "url" in btn:
-                        keyboard_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+                    keyboard_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+                elif "callback_data" in btn:
+                    keyboard_row.append(InlineKeyboardButton(text=btn["text"], callback_data=btn["callback_data"]))
+            elif isinstance(btn, str):
+                if btn in payments_cfg:
+                    pay_cfg = payments_cfg[btn]
+                    keyboard_row.append(
+                        InlineKeyboardButton(
+                            text=pay_cfg.get("title", "Оплатить"),
+                            pay=True
+                        )
+                    )
                 else:
                     keyboard_row.append(InlineKeyboardButton(text=btn, callback_data=btn))
+        if keyboard_row:
             keyboard.append(keyboard_row)
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+@dp.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@dp.message(F.successful_payment)
+async def successful_payment_handler(message: types.Message):
+    payload = message.successful_payment.invoice_payload
+    payments_cfg = config.get("payments", {})
+
+    for name, pay_cfg in payments_cfg.items():
+        if pay_cfg.get("payload") == payload:
+
+            await message.answer(
+                pay_cfg.get("successful_msg", "Спасибо за оплату!"),
+                reply_markup=get_inline_keyboard(pay_cfg.get("inline_buttons"))
+            )
+            break
+
 async def send_response(chat_id: int, data: dict):
+    payments_cfg = config.get("payments", {})
+
     if "backup" in data:
         await asyncio.sleep(data["backup"])
 
@@ -246,7 +316,24 @@ async def send_response(chat_id: int, data: dict):
     reply_markup = None
 
     if "inline_buttons" in data:
+
+        for btn in (data["inline_buttons"] if isinstance(data["inline_buttons"], list) else []):
+            if isinstance(btn, str) and btn in payments_cfg:
+                pay_cfg = payments_cfg[btn]
+                await bot.send_invoice(
+                    chat_id=chat_id,
+                    title=pay_cfg["title"],
+                    description=pay_cfg["description"],
+                    payload=pay_cfg["payload"],
+                    currency="XTR",  
+                    prices=[types.LabeledPrice(label=pay_cfg["title"], amount=pay_cfg["stars"])],
+                    start_parameter="star_payment",
+                    reply_markup=get_inline_keyboard([[btn]])
+                )
+                return  
+
         reply_markup = get_inline_keyboard(data["inline_buttons"])
+
     elif "reply_buttons" in data:
         reply_markup = get_reply_keyboard(data["reply_buttons"])
 
@@ -262,6 +349,7 @@ async def send_response(chat_id: int, data: dict):
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
+
     elif text:
         await bot.send_message(
             chat_id=chat_id,
