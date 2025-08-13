@@ -30,6 +30,8 @@ pip install pyyml
 
 >**/unblock** - Разблокировать пользователя по его айди
 
+>**/refund *(айди_платежа)* ** - Вернуть звезды пользователю
+
 ## Блокировка пользователя
 Чтобы заблокировать пользователя бота вас необходимо:
 >1. Узнать айди пользователя которого нужно заблокировать [@username_to_id_bot](https://t.me/username_to_id_bot)
@@ -153,7 +155,27 @@ payments: #Новый блок
 
 <img width="366" height="470" alt="file1 (2)" src="https://github.com/user-attachments/assets/140402a8-8e4c-4de5-8e6e-2e803a568b75" />
 
+## Пример возврата звезд пользователю
+Настройка рефаунда в конфиге:
+```yml
+refund:
+   enabled: true #Включен ли возврат
+   admin_only: true #Сделать команду возврата только для админов
+   disabled_message: "⛔ Возвраты временно отключены" #Сообщение при выключеном возврате
+```
+Нужно ввести команду **/refund** *(айди_операции)*
+
+Дальше бот попросит подтверждение возврата
+
+<img width="324" height="76" alt="image" src="https://github.com/user-attachments/assets/804e9b75-b557-4562-8854-afb0a60723f9" />
+
+После подтвержения бот вернет звезды пользоветелю и напишет сообщение
+
+<img width="431" height="82" alt="file1 (3)" src="https://github.com/user-attachments/assets/51c73c71-6b3b-4729-a75f-bd956650d410" />
+
+
 ## Пример неизвестной команды - ответ от бота config.yml
+
 
 ```yml
 unknown_message:
