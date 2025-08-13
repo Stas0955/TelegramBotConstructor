@@ -197,6 +197,8 @@ tech_notification:
     - text: "Приносим извинения за возможные неудобства"
       image: "tech_works.png"
 ```
+<img width="438" height="112" alt="image" src="https://github.com/user-attachments/assets/c7c690d2-755a-4505-ad6f-55ff7e6796e2" />
+
 ## Пример автоматичекий рассылки (точной по времени) auto_message.yml
 
 ```yml
