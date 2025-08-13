@@ -57,7 +57,6 @@ commands:
     description: "Статистика бота (админы)"
   
   /buy:
-    text: "Хотите купить 10 звёзд?"
     inline_buttons: ["star_payment"]
 # ==============================================
 # ОПЛАТА БОТУ ЗВЕЗДАМИ И Т.Д
@@ -65,7 +64,7 @@ commands:
 payments:
   star_payment:
     title: "Оплата звездами"
-    description: "Оплата внутренней валютой"
+    description: "Оплата внутренней валютой" #HTML теги не поддерживаются!
     successful_msg: |
       Спасибо за покупку
     inline_buttons: ["Назад"]
@@ -131,6 +130,7 @@ buttons:
     image: "promo.jpg"
     backup_print: 2  # Имитируем печать 2 секунды
     inline_buttons: ["Основное меню"]
+
 
 
 
