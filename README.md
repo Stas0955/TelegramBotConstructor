@@ -1,4 +1,4 @@
-# Данный конструктор бота позволит вам создать своего Telegram бота с кнопками
+# Данный конструктор бота позволит вам создать своего Telegram бота с кнопками и оплатой звёздами
 
 
 <img width="1000" height="300" alt="cxzcxz" src="https://github.com/user-attachments/assets/5a032065-9dce-41be-b34c-999b9f02f6c2" />
