@@ -9,7 +9,7 @@ from datetime import datetime, time
 from typing import List, Dict, Set, Optional, Callable, Awaitable, Any, Union
 
 from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject 
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -73,6 +73,9 @@ dp.callback_query.middleware(BlockCheckMiddleware())
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
+
+class RefundStates(StatesGroup):
+    waiting_confirmation = State()    
 
 with open("config.yml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -688,6 +691,90 @@ async def send_template_to_all_users(template_name: str, message_data: dict, mes
 async def cancel_broadcast(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ Рассылка отменена")
     await callback.answer()
+
+@dp.message(Command("refund"))
+async def cmd_refund(message: types.Message, command: CommandObject, state: FSMContext):
+    """Обработка команды возврата средств"""
+
+    refund_config = config.get("refund", {})
+
+    if not refund_config.get("enabled", True):
+        await message.answer(refund_config.get("disabled_message", "⛔ Возвраты временно отключены"))
+        return
+
+    if refund_config.get("admin_only", False):
+        if not (config.get("admin_ids") and message.from_user.id in config["admin_ids"]):
+            await message.answer("⛔ Эта команда доступна только администраторам")
+            return
+
+    if not command.args:
+        await message.answer("ℹ️ Используйте: /refund <ID_транзакции>")
+        return
+
+    transaction_id = command.args.strip()
+
+    await state.update_data(transaction_id=transaction_id)
+
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да", callback_data="refund_confirm"),
+            InlineKeyboardButton(text="❌ Нет", callback_data="refund_cancel")
+        ]
+    ])
+
+    await message.answer(
+        "Вы уверены, что хотите вернуть оплату?",
+        reply_markup=confirm_kb
+    )
+
+    await state.set_state(RefundStates.waiting_confirmation)
+
+@dp.callback_query(F.data == "refund_confirm", RefundStates.waiting_confirmation)
+async def confirm_refund(callback: types.CallbackQuery, state: FSMContext):
+    """Обработка подтверждения возврата с проверкой на уже возвращенные платежи"""
+    data = await state.get_data()
+    transaction_id = data.get("transaction_id")
+
+    try:
+
+        await bot.refund_star_payment(
+            user_id=callback.from_user.id,
+            telegram_payment_charge_id=transaction_id
+        )
+
+        await callback.message.edit_text(
+            "✅ Возврат успешно выполнен",
+            reply_markup=None
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+
+        if any(phrase in error_msg for phrase in [
+            "CHARGE_ALREADY_REFUNDED",
+            "already refunded",
+            "уже возвращен"
+        ]):
+            await callback.message.edit_text(
+                "ℹ️ Этот платеж уже был возвращен ранее",
+                reply_markup=None
+            )
+        else:
+            await callback.message.edit_text(
+                f"❌ Ошибка при возврате: {error_msg}",
+                reply_markup=None
+            )
+
+    await state.clear()
+
+@dp.callback_query(F.data == "refund_cancel", RefundStates.waiting_confirmation)
+async def cancel_refund(callback: types.CallbackQuery, state: FSMContext):
+    """Отмена возврата"""
+    await callback.message.edit_text(
+        "❌ Возврат отменен",
+        reply_markup=None
+    )
+    await state.clear()
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
