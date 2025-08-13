@@ -105,6 +105,8 @@ commands:
       - "Помощь"
       - "Контакты"
 ```
+<img width="1440" height="423" alt="image" src="https://github.com/user-attachments/assets/54b54493-4936-45a0-a941-49d05246864e" />
+
 ## Пример кнопки бота config.yml
 
 ```yml
@@ -116,6 +118,8 @@ buttons:
       - "Галерея"
       - "Контакты"
 ```
+<img width="1422" height="146" alt="image" src="https://github.com/user-attachments/assets/a6b7546a-f621-440d-aafb-77f3a3d48d76" />
+
 ## Пример оплаты звездами боту
 ```yml
 payments: #Новый блок
@@ -156,6 +160,7 @@ unknown_message:
   text: "Извините, я не понимаю эту команду. Напишите /help для справки."
   backup_print: 1  # Задержка перед отправкой (имитация печати)
 ```
+<img width="486" height="60" alt="image" src="https://github.com/user-attachments/assets/1ae05efc-9c75-4b50-801b-ac4914f9273f" />
 
 ## Пример автоматичекий рассылки (переодичной) auto_message.yml
 
