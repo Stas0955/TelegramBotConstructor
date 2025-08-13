@@ -133,13 +133,21 @@ payments: #Новый блок
 /buy:
     inline_buttons: ["star_payment"] #Название кнопки это название операции из блока payments, данная кнопка сразу станет полным сообщением с оплатой
 ```
-Вот так кнопка станет полным сообщением оплаты
+### Вот так кнопка станет полным сообщением оплаты
 
 <img width="209" height="114" alt="image" src="https://github.com/user-attachments/assets/e5a1d8a9-9f07-4db2-9425-6fa4d70c7b9a" />
 
-Вот так после нажатия кнопки оплатить
+### Вот так после нажатия кнопки оплатить
 
 <img width="322" height="282" alt="file1" src="https://github.com/user-attachments/assets/e6bb7f70-94d4-443c-8b7f-e3e9de330468" />
+
+### Так будет выглядить сообщение после оплаты и сообщение которое бот отправит после оплаты счета
+
+<img width="503" height="253" alt="file1 (1)" src="https://github.com/user-attachments/assets/5d8d1a01-7513-483b-b379-8eaa6cff85d7" />
+
+### Вот так выглядит чек
+
+<img width="366" height="470" alt="file1 (2)" src="https://github.com/user-attachments/assets/140402a8-8e4c-4de5-8e6e-2e803a568b75" />
 
 ## Пример неизвестной команды - ответ от бота config.yml
 
