@@ -7,9 +7,11 @@ import logging
 from html import escape
 from datetime import datetime, time
 from typing import List, Dict, Set, Optional, Callable, Awaitable, Any, Union
+import logging.handlers
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
-from aiogram.filters import Command, CommandObject 
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -34,12 +36,19 @@ logger = logging.getLogger(__name__)
 bot_running = True
 bot_task = None
 
+LOGS_DIR = Path("logs")
+LOGS_DIR.mkdir(exist_ok=True)
+
+LOG_DATE_FORMAT = "%Y-%m-%d_%H-%M-%S"
+
+log_counter = 1
+
 class BlockCheckMiddleware(BaseMiddleware):
     async def __call__(
-        self,
-        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-        event: Union[Message, CallbackQuery],
-        data: Dict[str, Any]
+            self,
+            handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
+            event: Union[Message, CallbackQuery],
+            data: Dict[str, Any]
     ) -> Any:
         if is_user_blocked(event.from_user.id):
 
@@ -75,7 +84,7 @@ class BroadcastStates(StatesGroup):
     waiting_for_message = State()
 
 class RefundStates(StatesGroup):
-    waiting_confirmation = State()    
+    waiting_confirmation = State()
 
 with open("config.yml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -97,22 +106,70 @@ bot = Bot(
 
 DB_PATH = "users.db"
 
+def setup_logging():
+    global log_counter
+
+    LOGS_DIR.mkdir(exist_ok=True)
+
+    log_time = datetime.now().strftime(LOG_DATE_FORMAT)
+    log_filename = f"{log_time}_{log_counter}.txt"
+    log_counter += 1
+    log_path = LOGS_DIR / log_filename
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('aiogram').setLevel(logging.INFO)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+
+    return logger
+
+logger = setup_logging()
+
 def init_users_files():
     """Инициализация базы SQLite для хранения пользователей"""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            chat_id INTEGER PRIMARY KEY
-        )
-    """)
+                CREATE TABLE IF NOT EXISTS users
+                (
+                    chat_id
+                    INTEGER
+                    PRIMARY
+                    KEY
+                )
+                """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS blocked_users (
-            chat_id INTEGER PRIMARY KEY
-        )
-    """)
+                CREATE TABLE IF NOT EXISTS blocked_users
+                (
+                    chat_id
+                    INTEGER
+                    PRIMARY
+                    KEY
+                )
+                """)
 
     conn.commit()
     conn.close()
@@ -133,9 +190,10 @@ def get_all_users() -> List[int]:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        SELECT chat_id FROM users
-        WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
-    """)
+                SELECT chat_id
+                FROM users
+                WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
+                """)
     rows = cur.fetchall()
     conn.close()
     return [row[0] for row in rows]
@@ -145,9 +203,10 @@ def get_active_users_count() -> int:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        SELECT COUNT(*) FROM users
-        WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
-    """)
+                SELECT COUNT(*)
+                FROM users
+                WHERE chat_id NOT IN (SELECT chat_id FROM blocked_users)
+                """)
     count = cur.fetchone()[0]
     conn.close()
     return count
@@ -204,12 +263,12 @@ def is_user_blocked(chat_id: int) -> bool:
     return result is not None
 
 async def check_user_blocked_middleware(handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-                                      event: Message,
-                                      data: Dict[str, Any]) -> Any:
+                                        event: Message,
+                                        data: Dict[str, Any]) -> Any:
     """Middleware для проверки блокировки пользователя"""
     if is_user_blocked(event.from_user.id):
-        blocked_message = config.get("blocked_message", 
-                                   {"text": "⛔ Вы заблокированы и не можете взаимодействовать с ботом"})
+        blocked_message = config.get("blocked_message",
+                                     {"text": "⛔ Вы заблокированы и не можете взаимодействовать с ботом"})
         await event.answer(**blocked_message)
         return
     return await handler(event, data)
@@ -282,7 +341,8 @@ def get_inline_keyboard(buttons):
                         if "url" in btn:
                             keyboard_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
                         elif "callback_data" in btn:
-                            keyboard_row.append(InlineKeyboardButton(text=btn["text"], callback_data=btn["callback_data"]))
+                            keyboard_row.append(
+                                InlineKeyboardButton(text=btn["text"], callback_data=btn["callback_data"]))
                     elif isinstance(btn, str):
                         if btn in payments_cfg:
                             pay_cfg = payments_cfg[btn]
@@ -479,7 +539,8 @@ async def setup_broadcasts():
                 asyncio.create_task(
                     interval_broadcast(message_config["interval"], message_config["message"])
                 )
-                logger.info(f"Запущена интервальная рассылка '{message_name}' каждые {message_config['interval']} секунд")
+                logger.info(
+                    f"Запущена интервальная рассылка '{message_name}' каждые {message_config['interval']} секунд")
 
             elif "time" in message_config:
                 asyncio.create_task(
@@ -544,7 +605,8 @@ async def cmd_template_message(message: types.Message):
     ])
 
     preview_text = message_data.get("text", "[Сообщение без текста]")
-    preview_text = preview_text.replace("<", "&lt;").replace(">", "&gt;")[:200]  
+    preview_text = preview_text.replace("<", "&lt;").replace(">", "&gt;")[
+        :200]  
 
     await message.answer(
         f"📨 Подтвердите рассылку шаблона <b>{template_name}</b>\n"
@@ -651,15 +713,15 @@ async def send_template_to_all_users(template_name: str, message_data: dict, mes
                     chat_id=chat_id,
                     photo=media.media,
                     caption=media.caption,
-                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or 
-                              get_inline_keyboard(prepared_data.get('inline_buttons'))
+                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or
+                                 get_inline_keyboard(prepared_data.get('inline_buttons'))
                 )
             elif prepared_data.get('text'):
                 await bot.send_message(
                     chat_id=chat_id,
                     text=prepared_data['text'],
-                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or 
-                              get_inline_keyboard(prepared_data.get('inline_buttons')),
+                    reply_markup=get_reply_keyboard(prepared_data.get('reply_buttons')) or
+                                 get_inline_keyboard(prepared_data.get('inline_buttons')),
                     parse_mode='HTML'
                 )
 
@@ -791,7 +853,7 @@ async def cmd_start(message: types.Message):
 def register_commands():
     for cmd in config["commands"]:
         if cmd.startswith('/'):
-            cmd_name = cmd[1:]  
+            cmd_name = cmd[1:]
 
             async def command_handler(message: types.Message, cmd=cmd):
                 save_user(
@@ -850,7 +912,7 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
                     parse_mode="HTML"
                 )
             success += 1
-            await asyncio.sleep(0.1)  
+            await asyncio.sleep(0.1)
         except Exception as e:
             failed += 1
             logger.error(f"Ошибка отправки в {chat_id}: {str(e)}")
@@ -989,7 +1051,7 @@ async def set_bot_commands():
     commands = []
     for cmd, data in config["commands"].items():
         if cmd.startswith('/') and "description" in data:
-            command = cmd.lstrip('/')  
+            command = cmd.lstrip('/')
             description = data["description"]
             commands.append(types.BotCommand(command=command, description=description))
 
@@ -998,7 +1060,7 @@ async def set_bot_commands():
         logger.info("Команды бота обновлены")
 
 async def run_bot():
-    global loop  
+    global loop
     loop = asyncio.get_event_loop()
     dp.startup.register(on_startup)
 
